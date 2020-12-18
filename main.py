@@ -2,7 +2,8 @@ import sys
 from enum import Enum
 from collections import namedtuple
 from math import sqrt, acos, degrees, floor
-
+import multiprocessing as mp
+print("Number of processors: ", mp.cpu_count())
 # from util import Vector3
 # Utils below 
 
@@ -37,6 +38,11 @@ non_starlink_interference_max = 20.0
 # Max user to Starlink beam angle, degrees from vertical.
 max_user_visible_angle = 45.0
 
+# Keep track of beam states for the visibility matrix
+class BeamState(Enum):
+    AVAILIBLE = 0 
+    CONNECTED = 1
+    UNAVAILIBLE = -1
 
 def calculate_angle_degrees(vertex: Vector3, point_a: Vector3, point_b: Vector3) -> float:
     """
@@ -65,18 +71,6 @@ def calculate_angle_degrees(vertex: Vector3, point_a: Vector3, point_b: Vector3)
 
     # Return the angle.
     return degrees(acos(dot_product_bound))
-
-
-def calculate_distance(point_a: Vector3, point_b: Vector3) -> float:
-    """
-    Returns: the distance between two 3D points.
-    """
-
-    # The square root of the difference squared between each compontent.
-    x_diff_squared = (point_b.x - point_a.x) ** 2
-    y_diff_squared = (point_b.y - point_a.y) ** 2
-    z_diff_squared = (point_b.z - point_a.z) ** 2
-    return sqrt(x_diff_squared + y_diff_squared + z_diff_squared)
 
 def read_object(object_type:str, line:str, dest:dict) -> bool:
     """
@@ -145,34 +139,85 @@ def read_scenario(filename:str, scenario:dict) -> bool:
 
     return True
 
-class BeamState(Enum):
-    AVAILIBLE = 0 
-    IN_USE = 1
-    UNAVAILIBLE = -1
+### New code starts below
+def generate_visibility_matrix(scenario:dict) -> [[BeamState]]:
+    """
+    Generates a visibility matrix given the scenario. 
+
+    Visibility matrix: (# users) x (# sats * colors/sat)
+    ; each row is a user's availibility to each satelleites color beam
+
+    entries are in [UNAVAILIBLE, AVAILIBLE, CONNECTED] given constraints
+    """
+    users = scenario["users"]
+    sats = scenario["sats"]
+    interferers = scenario["interferers"]
+
+    # max beams of a certain color that a satellite could have (1 per self_interference_max deg) * visible_angle
+    sat_dim = len(sats) * colors_per_satellite # * beams_per_color 
+    user_dim = len(users)
+
+    # initialize the beams to all unavailible 
+    v = [[BeamState.UNAVAILIBLE for _ in range(sat_dim)] for _ in range(user_dim)] # users x (sat * colors * num_beams)
+
+    for user_id in users: 
+        for sat_id in sats: 
+            user_pos = users[user_id]
+            sat_pos = sats[sat_id]
+            angle = calculate_angle_degrees(user_pos, origin, sat_pos)
+
+            # User terminals are unable to form beams too far off of from vertical.
+            if angle <= (180.0-max_user_visible_angle):
+                # sat is outside of range of user 
+                continue
+
+            # check for interferer constraint violations before marking availible
+            interferer_violation = False
+            for interferer_id in interferers:
+                interferer_pos = interferers[interferer_id]
+                interferer_angle = calculate_angle_degrees(user_pos, interferer_pos, sat_pos)
+                if interferer_angle < non_starlink_interference_max:
+                    interferer_violation = True
+                    break
+
+            if interferer_violation:
+                continue
+                
+            # mark all color beams availible for the sat, user combination avail 
+            # to start. 
+            for i in range(colors_per_satellite):
+                sat_i = (int(sat_id) -1) * colors_per_satellite + i
+                user_i = int(user_id) - 1
+                v[user_i][sat_i] = BeamState.AVAILIBLE 
+
+    return v
 
 def set_user_beam(v: [[BeamState]], user_i, color_i, sat_id, state):
     """
     Updates the visibility matrix entry for user, color, sat to be the state specified
+    *_i indicates the index which should be 0-indexed
     """
-
     v[user_i][(sat_id - 1) * colors_per_satellite + color_i] = state 
 
 def update_visibility(v, scenario, target_user_i, sat_id, color_i, beam_i):
     """
     Updates v to activate the beam described by sat_id and color_id for user user_id, 
     following the contraints below
+    *_i indicates the index which should be 0-indexed
 
     Constraints: 
     - no beams same color from same satellite < 10deg 
     - 32 beam cap 
     """
 
-    set_user_beam(v, target_user_i, color_i, sat_id, BeamState.IN_USE)
+    set_user_beam(v, target_user_i, color_i, sat_id, BeamState.CONNECTED)
 
-    target_user_pos = scenario['users'][str(target_user_i + 1)]
+    target_user_pos = scenario["users"][str(target_user_i + 1)]
 
+    # check to see if this is the 32nd beam, and should update all 
+    # currently availible beams to be unavailible 
     mark_sat_full = False
-    if beam_i == beams_per_satellite - 1: 
+    if beam_i == beams_per_satellite - 1: # beam_i is 0-indexed
         mark_sat_full = True 
     
     sat_i = (sat_id - 1) * colors_per_satellite
@@ -184,19 +229,19 @@ def update_visibility(v, scenario, target_user_i, sat_id, color_i, beam_i):
         user = v[user_i]
 
         if mark_sat_full: 
+            # mark all beams unavailible
             for i in range(sat_i, sat_i + colors_per_satellite):
                 if v[user_i][i] == BeamState.AVAILIBLE:
                     v[user_i][i] = BeamState.UNAVAILIBLE
-            # don't have to worry about below constraint bc all AVAILIBLE
-            # beams will be set to unavail
+            # don't have to worry about below constraint bc no beams are availible 
             continue
 
         if user[sat_i_color_i] != BeamState.AVAILIBLE: 
             # only need to update beams that are current availible 
             continue
 
-        user_pos = scenario['users'][str(user_i + 1)]
-        sat_pos = scenario['sats'][str(sat_id)]
+        user_pos = scenario["users"][str(user_i + 1)]
+        sat_pos = scenario["sats"][str(sat_id)]
         angle = calculate_angle_degrees(sat_pos, target_user_pos, user_pos)
 
         if angle < self_interference_max: 
@@ -233,15 +278,15 @@ def main() -> int:
     # solution[satellite_id][beam_id] = user_id
 
     v = generate_visibility_matrix(scenario)
-    
-    # keeps track of current beam id for sat
-    sat_beams = {}
 
-    # greedy solver 
+    # greedy satisfier  
+    # iterate through users, matching with first satellite beam availible
     num_users = len(v)
     num_sat_beam = len(v[0])
     for user_i in range(num_users): 
         user = v[user_i]
+        if user_i % 10000 == 0: 
+            print("=", end="")
         for sat_beam_i in range(num_sat_beam): 
             sat_beam_status = v[user_i][sat_beam_i]
 
@@ -261,7 +306,10 @@ def main() -> int:
     format_solution(solution)
     return 0
 
-def format_solution(solution:dict, outfile:str=None):
+def format_solution(solution:dict):
+    """
+    Format the solution result into string format, and print it.
+    """
     result = ""
     for sat_id in solution: 
         sat = solution[sat_id]
@@ -270,9 +318,7 @@ def format_solution(solution:dict, outfile:str=None):
             beam = str(beam_i + 1)
             user = str(sat[beam_i][0])
             color = valid_color_ids[sat[beam_i][1]] 
-            # TODO use string formatting for this 
-            new_line = " ".join(["sat", str(sat_id), "beam", beam, "user", user, "color", color]) 
-            new_line += "\n"
+            new_line = f"sat {str(sat_id)} beam {beam} user {user} color {color}\n" 
             result += new_line 
     print(result)
 
@@ -287,52 +333,5 @@ def matrix_printer(m):
             print(str(m[row][col]), end=", ")
         print()
 
-def generate_visibility_matrix(scenario:dict) -> [[BeamState]]:
-    """
-    Generates a visibility matrix given the scenario. 
-
-    Visibility matrix: (# users) x (# sats * colors/sat)
-    ; each row is a user's availibility to each satelleites color beam
-
-    entries are in [UNAVAILIBLE, AVAILIBLE, IN_USE] given constraints
-    """
-    users = scenario['users']
-    sats = scenario['sats']
-    interferers = scenario['interferers']
-
-    # max beams of a certain color that a satellite could have (1 per self_interference_max deg) * visible_angle
-    sat_dim = len(sats) * colors_per_satellite # * beams_per_color 
-    user_dim = len(users)
-    v = [[BeamState.UNAVAILIBLE for _ in range(sat_dim)] for _ in range(user_dim)] # users x (sat * colors * num_beams)
-
-    for user_id in users: 
-        for sat_id in sats: 
-            user_pos = users[user_id]
-            sat_pos = sats[sat_id]
-            angle = calculate_angle_degrees(user_pos, origin, sat_pos)
-
-            # User terminals are unable to form beams too far off of from vertical.
-            if angle <= (180.0-max_user_visible_angle):
-                # sat is outside of range of user 
-                continue
-
-            interferer_violation = False
-            for interferer_id in interferers:
-                interferer_pos = interferers[interferer_id]
-                interferer_angle = calculate_angle_degrees(user_pos, interferer_pos, sat_pos)
-                if interferer_angle < non_starlink_interference_max:
-                    interferer_violation = True
-                    break
-            if interferer_violation:
-                continue
-                
-            for i in range(colors_per_satellite):
-                sat_i = (int(sat_id) -1) * colors_per_satellite + i
-                user_i = int(user_id) - 1
-                v[user_i][sat_i] = BeamState.AVAILIBLE 
-
-    return v
-
 if __name__ == "__main__":
     exit(main())
-

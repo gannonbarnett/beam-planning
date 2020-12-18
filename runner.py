@@ -1,8 +1,20 @@
 import os 
 import sys
+import glob
+import timeit
 
-# this file just alias for running tests
+# runs tests, stores output w/ commit hash in results.csv
+def run_test(filename):
+    os.system("python3 main.py " + filename + " | python3 evaluate.py " + filename)
+
+def run_all_tests():
+    input_filenames = glob.glob("./test_cases/*.txt").sorted()
+    for filename in input_filenames: 
+        print("testing " + str(filename))
+        elapsed = timeit.timeit('run_test(\"' + filename + '\")', 'from __main__ import run_test', number=1)
+        print(" Time :" + str(elapsed))
 
 if __name__ == "__main__":
-    input_filename = sys.argv[1]
-    os.system("python3 main.py " + input_filename + " | python3 evaluate.py " + input_filename)
+    # run_all_tests()
+    run_test(sys.argv[1])
+
