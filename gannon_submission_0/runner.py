@@ -16,7 +16,7 @@ def run_all_tests(file_=None):
     for filename in filenames: 
         print("testing " + str(filename))
         elapsed = timeit.timeit('run_test(\"' + filename + '\")', 'from __main__ import run_test', number=1)
-        print(" Time :" + str(elapsed) + "s")
+        print(" Time :" + str(elapsed))
 
 if __name__ == "__main__":
     run_all_tests(sys.argv[1] if len(sys.argv) == 2 else None)

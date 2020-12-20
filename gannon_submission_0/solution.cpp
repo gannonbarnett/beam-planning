@@ -13,37 +13,20 @@
 
 using namespace std;
 
-// type aliases for different id types 
 using id_t_ = int;
 using sat_id_t = id_t_; 
 using user_id_t = id_t_; 
+using interferer_id_t = id_t_;
 
 using vector_3d_t = array<float, 3>;
 using pos_vec_t = vector<vector_3d_t>;
 using scenario_t = map<string, pos_vec_t>;
 
-#define BEAMS_PER_SATELLITE 32 
-#define COLORS_PER_SATELLITE 4
-#define MAX_USER_VISIBLE_ANGLE 45.0
-#define NON_STARLINK_INTERFERENCE_MAX 20.0
-#define SELF_INTERFERENCE_MAX 10.0
-array<char, (size_t) COLORS_PER_SATELLITE> COLOR_IDS = {'A', 'B', 'C', 'D'};
-
-vector_3d_t ORIGIN = {0,0,0};
-
 struct SatBeamEntry {
-	/**
-	 * Keep track of a specific sat's color beam usage 
-	 */ 
 	sat_id_t sat_id; 
 	char color;
-
-	// list of beam targets of color
-	vector<vector_3d_t>* beam_list;  
-
-	// shared int pointer used to keep track of total beams across 
-	// all colors for sat_id 
-	int* total_sat_beam_count; 
+	vector<vector_3d_t>* beam_list;
+	int* beam_i; 
 };
 
 struct UserVisibilityEntry {
@@ -51,31 +34,36 @@ struct UserVisibilityEntry {
 	vector<sat_id_t>* visible_sats; 
 };
 
-bool sortUsersByPotentialCoverage(UserVisibilityEntry u1, UserVisibilityEntry u2) {
-	/**
-	 * Sort function for sorting users in ascending order by num of visible sats 
-	 * */
+bool compareUserVisibilityEntries(UserVisibilityEntry u1, UserVisibilityEntry u2) {
 	return (*u1.visible_sats).size() < (*u2.visible_sats).size();
 }
 
+#define BEAMS_PER_SATELLITE 32 
+#define COLORS_PER_SATELLITE 4
+#define MAX_USER_VISIBLE_ANGLE 45.0
+#define NON_STARLINK_INTERFERENCE_MAX 20.0
+#define SELF_INTERFERENCE_MAX 10.0
 #define USER_KEY "user"
 #define SATS_KEY "sat"
 #define INTERFERER_KEY "interferer"
+
+vector_3d_t ORIGIN = {0,0,0};
+
+array<char, (size_t) COLORS_PER_SATELLITE> COLOR_IDS = {'A', 'B', 'C', 'D'};
+
+#define DOT(a, b) (a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
+#define MAG(a) (sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]))
 
 #define MIN(a, b) (a < b ? a : b)
 #define MAX(a, b) (a > b ? a : b)
 
 float calc_angle(vector_3d_t vertex, vector_3d_t point_a, vector_3d_t point_b)
 {
-	/**
-	 * Returns inner angle formed by (point_a -> vertex) and (point_b -> vertex). 
-	 * */
-
     vector_3d_t va = {point_a[0] - vertex[0], point_a[1] - vertex[1], point_a[2] - vertex[2]};
     vector_3d_t vb = {point_b[0] - vertex[0], point_b[1] - vertex[1], point_b[2] - vertex[2]};
 
-    float va_mag = sqrt( pow(va[0], 2) + pow(va[1], 2) + pow(va[2], 2));
-    float vb_mag = sqrt( pow(vb[0], 2) + pow(vb[1], 2) + pow(vb[2], 2));
+    float va_mag = sqrt( pow(va[0], 2) + pow(va[1], 2) + pow(va[2], 2) );
+    float vb_mag = sqrt( pow(vb[0], 2) + pow(vb[1], 2) + pow(vb[2], 2) );
 
     vector_3d_t va_norm = {va[0] / va_mag, va[1] / va_mag, va[2] / va_mag};
     vector_3d_t vb_norm = {vb[0] / vb_mag, vb[1] / vb_mag, vb[2] / vb_mag};
@@ -104,32 +92,14 @@ vector<string> split(const string &text, char sep) {
 }
 
 static inline void greedy_solver(scenario_t scenario, vector<UserVisibilityEntry> user_vis_list, vector<SatBeamEntry> sat_beam_list) {
-	/**
-	 * Output the beam assignments to stdout given inputs. Considers each user by traversing
-	 * user_vis_list in ascending order and assigns a beam from an availible satellite. 
-	 * 
-	 * scenario: map regarding user, sat, and interferer locations
-	 * user_vis_list: list of users and their visible satellites
-	 * sat_beam_list: list of satellites and their currently allocated beams, 
-	 * 		s.t. length of sat_beam_list = # sats * # colors ;; (total beams)
-	 * 		s.t. sat_beam_list[i + color_index] has data for sat with id i+1 and color COLOR_IDS[color_index]
-	 * 			for i in {sat_ids} and color_index in [0, length COLOR_IDS - 1] 
-	 * */
-
 	// iterate through users	
 	int num_user_entries = (int) user_vis_list.size();
 	int num_colors = (int) COLOR_IDS.size();
 	for (int i = 0; i < num_user_entries; i ++) {
 		// iterate through sats 
 		user_id_t user_i = user_vis_list[i].user_id;
-
-		// index in user's visible satellite list 
 		int sat_list_i = 0;
-
-		// have we assigned a beam to this user
 		bool assigned_beam = false;
-
-		// iterate through all visible satellites for this user
 		int num_visible_sats = (*user_vis_list[i].visible_sats).size();
 		while (sat_list_i < num_visible_sats && !assigned_beam) {
 			sat_id_t sat_i = (*user_vis_list[i].visible_sats)[sat_list_i];
@@ -137,7 +107,7 @@ static inline void greedy_solver(scenario_t scenario, vector<UserVisibilityEntry
 			SatBeamEntry beam_entry = sat_beam_list[sat_beam_i];
 
 			// see if has beams left to delegate
-			if ((*beam_entry.total_sat_beam_count) >= BEAMS_PER_SATELLITE) {
+			if ((*beam_entry.beam_i) >= BEAMS_PER_SATELLITE) {
 				// go to next sat 
                 sat_list_i += 1;
 				continue;
@@ -152,31 +122,25 @@ static inline void greedy_solver(scenario_t scenario, vector<UserVisibilityEntry
 				SatBeamEntry next_beam_entry = sat_beam_list[sat_beam_i + color_i];
 				assert(next_beam_entry.sat_id == sat_i);
 				vector<vector_3d_t> current_beam_list = *next_beam_entry.beam_list; 
-
 				// iterate over current beams in color, see if any conflict. 
 				// if no conflict, good to assign to beam! 
-				bool self_interference = false;
+				bool self_conflict = false;
 				int num_existing_beams = (int) current_beam_list.size();
 				for (int beam_i = 0; beam_i < num_existing_beams; beam_i ++) {
 					vector_3d_t beam_target = current_beam_list[beam_i];
 					float self_interfere_angle = calc_angle(sat_pos, user_pos, beam_target);
 					if (self_interfere_angle < SELF_INTERFERENCE_MAX) {
-						self_interference = true; 
+						self_conflict = true; 
 						break;
 					}
 				}
 
-				// adding a beam to the user for this color is ok
-				if (!self_interference) {
-					// update the entry for satellite
+				if (!self_conflict) {
 					(*next_beam_entry.beam_list).push_back(user_pos);
-
-					// update the total for this satellite
-					(*next_beam_entry.total_sat_beam_count) += 1;
-
-					// all ids are stored as 0-indexed, so +1 for 1-indexed specs
+					(*next_beam_entry.beam_i) += 1;
+					assert(*next_beam_entry.beam_i <= BEAMS_PER_SATELLITE);
 					cout << "sat " << next_beam_entry.sat_id + 1 << " "; 
-					cout << "beam " << *next_beam_entry.total_sat_beam_count << " "; 
+					cout << "beam " << *next_beam_entry.beam_i << " "; 
 					cout << "user " << user_i + 1 << " "; 
 					cout << "color " << next_beam_entry.color << endl; 
 
@@ -189,16 +153,10 @@ static inline void greedy_solver(scenario_t scenario, vector<UserVisibilityEntry
 	} 
 }
 
-void start_solve(string filename) {
+void parse_scenario(string filename) {
 	/**
-	 * Parse scenario at filename 
-	 * 
-	 * Build scenario object
-	 * 
-	 * Build sat_beam_list; create SatBeamEntry for sat {sat_id} for color {all colors}
-	 * 
-	 * Build user_vis_list; create UserVisibilityEntry for user {users}, adding 
-	 * 							sat in {sat_id} if (visible && !non_starlink_interference)
+	 * Parse a scenario at the specified filename and
+	 * return
 	 * */
     ifstream scenario_file(filename);
 	if (scenario_file.fail()) {
@@ -250,7 +208,6 @@ void start_solve(string filename) {
 	int num_users = (int) scenario[USER_KEY].size();
 	int num_sat_beams = (int) sat_beam_list.size();
 	int num_interferers = (int) scenario[INTERFERER_KEY].size();
-	int total_visible = 0;
 	for (int user_i = 0; user_i < num_users; user_i ++) {
 		int sat_beam_i = 0;
 		struct UserVisibilityEntry new_entry = {user_i, new vector<sat_id_t>()};
@@ -292,14 +249,13 @@ void start_solve(string filename) {
 			// if here, sat could form beam w user 
 			(*new_entry.visible_sats).push_back(sat_id);
 			sat_beam_i += COLORS_PER_SATELLITE;
-			total_visible += 1;
 		}
 
 		user_vis_list.push_back(new_entry);
 	}
 
-	// sort visibility list ascending potential coverage 
-	sort(user_vis_list.begin(), user_vis_list.end(), sortUsersByPotentialCoverage);
+	// sort visibility list ascending in satellite 
+	sort(user_vis_list.begin(), user_vis_list.end(), compareUserVisibilityEntries);
 
 	// greedy solver based on visibility list
 	greedy_solver(scenario, user_vis_list, sat_beam_list);
@@ -311,9 +267,9 @@ void start_solve(string filename) {
 int main(int argc, char** argv)
 {
 	if (argc != 2) {
-		cout << "Expected argument: /path/to/scenario.txt";
+		cout << "Need to put a filename";
 		return 0;
 	}
-    start_solve(argv[1]);
+    parse_scenario(argv[1]);
 	return 0;
 }
