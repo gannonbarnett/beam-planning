@@ -3,7 +3,7 @@ from enum import Enum
 from collections import namedtuple
 from math import sqrt, acos, degrees, floor
 import multiprocessing as mp
-print("Number of processors: ", mp.cpu_count())
+# print("Number of processors: ", mp.cpu_count())
 # from util import Vector3
 # Utils below 
 
@@ -247,7 +247,12 @@ def update_visibility(v, scenario, target_user_i, sat_id, color_i, beam_i):
         if angle < self_interference_max: 
             v[user_i][sat_i_color_i] = BeamState.UNAVAILIBLE
 
-
+def assign_avail_beam(user_pos, potential_sats) -> int:
+    """
+    given a user's pos and a list of satellites to consider, 
+    return the satellite id that should be used
+    """
+    
 def main() -> int:
     """
     Entry point.
@@ -277,16 +282,16 @@ def main() -> int:
     # Solution structure:
     # solution[satellite_id][beam_id] = user_id
 
+    # return 
     v = generate_visibility_matrix(scenario)
-
     # greedy satisfier  
     # iterate through users, matching with first satellite beam availible
     num_users = len(v)
     num_sat_beam = len(v[0])
     for user_i in range(num_users): 
         user = v[user_i]
-        if user_i % 10000 == 0: 
-            print("=", end="")
+        # if user_i % 10000 == 0: 
+        #     print("=", end="")
         for sat_beam_i in range(num_sat_beam): 
             sat_beam_status = v[user_i][sat_beam_i]
 
@@ -322,16 +327,16 @@ def format_solution(solution:dict):
             result += new_line 
     print(result)
 
-def matrix_printer(m):
-    """
-    Prints the matrix in a readable format
-    """
-    num_rows = len(m)
-    num_cols = len(m[0])
-    for row in range(num_rows):
-        for col in range(num_cols):
-            print(str(m[row][col]), end=", ")
-        print()
+# def matrix_printer(m):
+#     """
+#     Prints the matrix in a readable format
+#     """
+#     num_rows = len(m)
+#     num_cols = len(m[0])
+#     for row in range(num_rows):
+#         for col in range(num_cols):
+#             print(str(m[row][col]), end=", ")
+#         print()
 
 if __name__ == "__main__":
     exit(main())
