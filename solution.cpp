@@ -103,7 +103,9 @@ vector<string> split(const string &text, char sep) {
 	return tokens;
 }
 
-static inline void greedy_solver(scenario_t scenario, vector<UserVisibilityEntry> user_vis_list, vector<SatBeamEntry> sat_beam_list) {
+static inline void assign_beams_and_print(scenario_t scenario, 
+										  vector<UserVisibilityEntry> user_vis_list, 
+										  vector<SatBeamEntry> sat_beam_list) {
 	/**
 	 * Output the beam assignments to stdout given inputs. Considers each user by traversing
 	 * user_vis_list in ascending order and assigns a beam from an availible satellite. 
@@ -189,17 +191,80 @@ static inline void greedy_solver(scenario_t scenario, vector<UserVisibilityEntry
 	} 
 }
 
-void start_solve(string filename) {
+inline static vector<UserVisibilityEntry> generate_user_vis_list(scenario_t scenario, vector<SatBeamEntry> sat_beam_list) {
+	/**
+	 * Generates a user_vis_list given the scenario
+	 * 
+	 * Returns a list of len(# users), where each entry contains a user_id and sats that user 
+	 * 	could connect to while observing 1) user visibility constraint and 2) non-starlink interferer constraint. 
+	 * */
+
+	vector<UserVisibilityEntry> user_vis_list = {};
+
+	int num_users = (int) scenario[USER_KEY].size();
+	int num_sat_beams = (int) sat_beam_list.size();
+	int num_interferers = (int) scenario[INTERFERER_KEY].size();
+
+	// below loop would be good for parallelizing
+	for (int user_i = 0; user_i < num_users; user_i ++) {
+		struct UserVisibilityEntry new_entry = {user_i, new vector<sat_id_t>()};
+
+		// iterate over each satellite using the sat_beam_list vector 
+		for (int sat_beam_i = 0; sat_beam_i < num_sat_beams; sat_beam_i += COLORS_PER_SATELLITE) {
+			SatBeamEntry beam_entry = sat_beam_list[sat_beam_i];
+
+			// check if sat in user visibility 
+			sat_id_t sat_id = beam_entry.sat_id;
+
+			vector_3d_t sat_pos = scenario[SATS_KEY][sat_id]; 
+			vector_3d_t user_pos = scenario[USER_KEY][user_i];
+
+			float user_sat_angle = calc_angle(user_pos, ORIGIN, sat_pos) <= (180.0 - MAX_USER_VISIBLE_ANGLE); 
+			// Constraint: sat must be visible to user
+			if (user_sat_angle) {
+				// sat is outside of range of user 
+				// go to next sat 
+				continue;
+			}
+
+			// Constraint: angle with user must not be too small w/ interferer
+			bool interferer_violation = false;
+			for (int int_i = 0; int_i < num_interferers; int_i ++) {
+				vector_3d_t int_pos = scenario[INTERFERER_KEY][int_i];
+				if (calc_angle(user_pos, int_pos, sat_pos) < NON_STARLINK_INTERFERENCE_MAX) {
+					interferer_violation = true;
+					break;
+				}
+			}
+			if (interferer_violation) {
+				// interferer
+				// go to next sat
+				continue;
+			}
+
+			// if here, sat could form beam w user 
+			(*new_entry.visible_sats).push_back(sat_id);
+		}
+
+		user_vis_list.push_back(new_entry);
+	}
+
+	return user_vis_list;
+}
+
+void solve(string filename) {
 	/**
 	 * Parse scenario at filename 
 	 * 
-	 * Build scenario object
-	 * 
-	 * Build sat_beam_list; create SatBeamEntry for sat {sat_id} for color {all colors}
-	 * 
-	 * Build user_vis_list; create UserVisibilityEntry for user {users}, adding 
+	 * General flow: 
+	 * - build scenario object
+	 * - build sat_beam_list; create SatBeamEntry for sat {sat_id} for color {all colors}
+	 * - build user_vis_list; create UserVisibilityEntry for user {users}, adding 
 	 * 							sat in {sat_id} if (visible && !non_starlink_interference)
+	 * - sort user_vis_list by coverage 
+	 * - assign beams and print solution 
 	 * */
+
     ifstream scenario_file(filename);
 	if (scenario_file.fail()) {
 		cout << "File \'" << filename << "\' does not exist" << endl;
@@ -245,65 +310,12 @@ void start_solve(string filename) {
     }
     scenario_file.close();
 
-	vector<UserVisibilityEntry> user_vis_list = {};
-	// build user visibility list
-	int num_users = (int) scenario[USER_KEY].size();
-	int num_sat_beams = (int) sat_beam_list.size();
-	int num_interferers = (int) scenario[INTERFERER_KEY].size();
-	int total_visible = 0;
-	for (int user_i = 0; user_i < num_users; user_i ++) {
-		int sat_beam_i = 0;
-		struct UserVisibilityEntry new_entry = {user_i, new vector<sat_id_t>()};
-
-		while (sat_beam_i < num_sat_beams) {
-			SatBeamEntry beam_entry = sat_beam_list[sat_beam_i];
-
-			// check if sat in user visibility 
-			sat_id_t sat_id = beam_entry.sat_id;
-
-			vector_3d_t sat_pos = scenario[SATS_KEY][sat_id]; 
-			vector_3d_t user_pos = scenario[USER_KEY][user_i];
-
-			float user_sat_angle = calc_angle(user_pos, ORIGIN, sat_pos) <= (180.0 - MAX_USER_VISIBLE_ANGLE); 
-			// Constraint: sat must be visible to user
-			if (user_sat_angle) {
-				// sat is outside of range of user 
-				// go to next sat 
-				sat_beam_i += COLORS_PER_SATELLITE;
-				continue;
-			}
-
-			// Constraint: angle with user must not be too small w/ interferer
-			bool interferer_violation = false;
-			for (int int_i = 0; int_i < num_interferers; int_i ++) {
-				vector_3d_t int_pos = scenario[INTERFERER_KEY][int_i];
-				if (calc_angle(user_pos, int_pos, sat_pos) < NON_STARLINK_INTERFERENCE_MAX) {
-					interferer_violation = true;
-					break;
-				}
-			}
-			if (interferer_violation) {
-				// interferer
-				// go to next sat
-				sat_beam_i += COLORS_PER_SATELLITE;
-				continue;
-			}
-
-			// if here, sat could form beam w user 
-			(*new_entry.visible_sats).push_back(sat_id);
-			sat_beam_i += COLORS_PER_SATELLITE;
-			total_visible += 1;
-		}
-
-		user_vis_list.push_back(new_entry);
-	}
+	vector<UserVisibilityEntry> user_vis_list = generate_user_vis_list(scenario, sat_beam_list);
 
 	// sort visibility list ascending potential coverage 
 	sort(user_vis_list.begin(), user_vis_list.end(), sortUsersByPotentialCoverage);
 
-	// greedy solver based on visibility list
-	greedy_solver(scenario, user_vis_list, sat_beam_list);
-
+	assign_beams_and_print(scenario, user_vis_list, sat_beam_list);
     return;
 }
 
@@ -311,9 +323,9 @@ void start_solve(string filename) {
 int main(int argc, char** argv)
 {
 	if (argc != 2) {
-		cout << "Expected argument: /path/to/scenario.txt";
+		cout << "Expected argument: /path/to/scenario.txt" << endl;
 		return 0;
 	}
-    start_solve(argv[1]);
+    solve(argv[1]);
 	return 0;
 }
