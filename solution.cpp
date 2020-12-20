@@ -100,12 +100,15 @@ vector<string> split(const string &text, char sep) {
 
 static inline void greedy_solver(scenario_t scenario, vector<UserVisibilityEntry> user_vis_list, vector<SatBeamEntry> sat_beam_list) {
 	// iterate through users	
-	for (int i = 0; i < user_vis_list.size(); i ++) {
+	int num_user_entries = (int) user_vis_list.size();
+	int num_colors = (int) COLOR_IDS.size();
+	for (int i = 0; i < num_user_entries; i ++) {
 		// iterate through sats 
 		user_id_t user_i = user_vis_list[i].user_id;
 		int sat_list_i = 0;
 		bool assigned_beam = false;
-		while (sat_list_i < (*user_vis_list[i].visible_sats).size() && !assigned_beam) {
+		int num_visible_sats = (*user_vis_list[i].visible_sats).size();
+		while (sat_list_i < num_visible_sats && !assigned_beam) {
 			sat_id_t sat_i = (*user_vis_list[i].visible_sats)[sat_list_i];
 			int sat_beam_i = sat_i * COLORS_PER_SATELLITE; // sat_beam is 0-indexed, sat_id is 1
 			SatBeamEntry beam_entry = sat_beam_list[sat_beam_i];
@@ -122,14 +125,15 @@ static inline void greedy_solver(scenario_t scenario, vector<UserVisibilityEntry
 			vector_3d_t user_pos = scenario[USER_KEY][user_i];
 
 			// Constraint: sat must not already be serving a color beam 
-			for (int color_i = 0; color_i < COLOR_IDS.size(); color_i ++) {
+			for (int color_i = 0; color_i < num_colors; color_i ++) {
 				SatBeamEntry next_beam_entry = sat_beam_list[sat_beam_i + color_i];
 				assert(next_beam_entry.sat_id == sat_i);
 				vector<vector_3d_t> current_beam_list = *next_beam_entry.beam_list; 
 				// iterate over current beams in color, see if any conflict. 
 				// if no conflict, good to assign to beam! 
 				bool self_conflict = false;
-				for (int beam_i = 0; beam_i < current_beam_list.size(); beam_i ++) {
+				int num_existing_beams = (int) current_beam_list.size();
+				for (int beam_i = 0; beam_i < num_existing_beams; beam_i ++) {
 					vector_3d_t beam_target = current_beam_list[beam_i];
 					float self_interfere_angle = calc_angle(sat_pos, user_pos, beam_target);
 					if (self_interfere_angle < SELF_INTERFERENCE_MAX) {
@@ -146,6 +150,7 @@ static inline void greedy_solver(scenario_t scenario, vector<UserVisibilityEntry
 					cout << "beam " << *next_beam_entry.beam_i << " "; 
 					cout << "user " << user_i + 1 << " "; 
 					cout << "color " << next_beam_entry.color << endl; 
+
 					assigned_beam = true;
 					break; 
 				}
@@ -172,7 +177,6 @@ void parse_scenario(string filename)
 	// sat beam list keeps track of each satellite's commited beams 
 	// used during constraint checking in solve function
 	vector<SatBeamEntry> sat_beam_list = {};
-
 
 	// parse the scenario, building the scenario map and the sat beam list 
     while (getline (scenario_file, line_buff)) {
@@ -209,11 +213,14 @@ void parse_scenario(string filename)
 
 	vector<UserVisibilityEntry> user_vis_list = {};
 	// build user visibility list
-	for (int user_i = 0; user_i < scenario[USER_KEY].size(); user_i ++) {
+	int num_users = (int) scenario[USER_KEY].size();
+	int num_sat_beams = (int) sat_beam_list.size();
+	int num_interferers = (int) scenario[INTERFERER_KEY].size();
+	for (int user_i = 0; user_i < num_users; user_i ++) {
 		int sat_beam_i = 0;
 		struct UserVisibilityEntry new_entry = {user_i, new vector<sat_id_t>()};
 
-		while (sat_beam_i < sat_beam_list.size()) {
+		while (sat_beam_i < num_sat_beams) {
 			SatBeamEntry beam_entry = sat_beam_list[sat_beam_i];
 
 			// check if sat in user visibility 
@@ -233,7 +240,7 @@ void parse_scenario(string filename)
 
 			// Constraint: angle with user must not be too small w/ interferer
 			bool interferer_violation = false;
-			for (int int_i = 0; int_i < scenario[INTERFERER_KEY].size(); int_i ++) {
+			for (int int_i = 0; int_i < num_interferers; int_i ++) {
 				vector_3d_t int_pos = scenario[INTERFERER_KEY][int_i];
 				if (calc_angle(user_pos, int_pos, sat_pos) < NON_STARLINK_INTERFERENCE_MAX) {
 					interferer_violation = true;
